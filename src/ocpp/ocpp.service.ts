@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import Ajv, { ErrorObject, ValidateFunction } from "ajv";
+import addFormats from "ajv-formats";
 
 import {
   BootNotificationConf,
@@ -17,6 +18,7 @@ import {
 } from "./schemas";
 
 const ajv = new Ajv();
+addFormats(ajv);
 
 const ocppValidators: Record<string, ValidateFunction<unknown>> = {
   [OcppMessageAction.BOOT_NOTIFICATION]: ajv.compile<BootNotificationConf>(BootNotificationConfSchema)

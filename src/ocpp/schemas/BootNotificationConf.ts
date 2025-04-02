@@ -12,7 +12,7 @@ export const BootNotificationConfSchema = {
     },
     status: {
       type: "string",
-      enum: [Object.values(RegistrationStatus)]
+      enum: Object.values(RegistrationStatus)
     }
   },
   additionalProperties: false,

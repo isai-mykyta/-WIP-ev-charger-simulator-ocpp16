@@ -60,7 +60,10 @@ export class WebSocketService {
   }
 
   private onPong() {};
-  private onError() {};
+  
+  private onError(error: Error) {
+    console.error("WS error occured", error);
+  };
 
   private onMessage(msg: WebSocket.RawData): void {
     let parsedMessage: OcppMessage<unknown>;
