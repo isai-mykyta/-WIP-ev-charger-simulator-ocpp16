@@ -127,11 +127,43 @@ export class WebSocketService {
   };
 
   private handleCallMessage(message: CallMessage<unknown>): void {
-    const [,,action] = message;
+    const [, messageId, action, payload] = message;
     const isTransactionRequest = [OcppMessageAction.REMOTE_STOP_TRANSACTION, OcppMessageAction.REMOTE_START_TRANSACTION].includes(action);
     
     if (isTransactionRequest && this.registrationStatus === RegistrationStatus.REJECTED) {
       console.error("Can not proceed transaction request while CS being rejected by Central System");
+      return;
+    }
+
+    const { isValid, errors } = this.ocppService.validateOcppPayload(action, payload);
+
+    if (!isValid) {
+      const [firstError] = errors;
+      let errorMessage: CallErrorMessage;
+
+      switch (firstError.keyword) {
+      case "additionalProperties":
+      case "enum":
+      case "format":
+      case "maxLength":
+        errorMessage = this.ocppService.callErrorMessage(messageId, OcppErrorCode.FORMATION_VIOLATION);
+        break;
+      case "type":
+        errorMessage = this.ocppService.callErrorMessage(messageId, OcppErrorCode.TYPE_CONSTRAINT_VIOLATION);
+        break;
+      case "required":
+        errorMessage = this.ocppService.callErrorMessage(messageId, OcppErrorCode.PROTOCOL_ERROR);
+        break;
+      case "NotImplemented":
+        errorMessage = this.ocppService.callErrorMessage(messageId, OcppErrorCode.NOT_IMPLEMENTED);
+        break;
+      default:
+        errorMessage = this.ocppService.callErrorMessage(messageId, OcppErrorCode.GENERIC_ERROR);
+        break;
+      }
+
+      console.error("Error during validation of OCPP call message", errorMessage);
+      this.send(JSON.stringify(errorMessage));
       return;
     }
   }
@@ -150,6 +182,7 @@ export class WebSocketService {
 
     if (!isValid) {
       console.error("Recieved invlid OCPP result message", errors);
+      this.cleanPendingRequest(messageId);
       return;
     }
 
@@ -195,6 +228,10 @@ export class WebSocketService {
   private storePendingRequest(message: CallMessage<unknown>): void {
     const [, messageId] = message;
     this.pendingMessages.set(messageId, message);
+  }
+
+  private cleanPendingRequest(messageId: string): void {
+    this.pendingMessages.delete(messageId);
   }
 
   private send(message: string): void {

@@ -39,7 +39,7 @@ export class OcppService {
     const validator = ocppValidators[action];
 
     if (!validator) {
-      return { isValid: false, errors: [{ keyword: "NotFound" } as ErrorObject] };
+      return { isValid: false, errors: [{ keyword: "NotImplemented" } as ErrorObject] };
     }
   
     const isValid = validator(payload);
