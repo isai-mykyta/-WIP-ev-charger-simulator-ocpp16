@@ -74,15 +74,11 @@ export class WebSocketService {
       parsedMessage = JSON.parse(msg.toString());
     } catch {
       console.error("Failed to parse incoming OCPP message", msg);
-      const errorMessage = this.ocppService.callErrorMessage(randomUUID(), OcppErrorCode.FORMATION_VIOLATION, "Invalid OCPP message received");
-      this.send(JSON.stringify(errorMessage));
       return;
     }
 
     if (!Array.isArray(parsedMessage)) {
       console.error("Invalid OCPP message received", parsedMessage);
-      const errorMessage = this.ocppService.callErrorMessage(randomUUID(), OcppErrorCode.FORMATION_VIOLATION, "Invalid OCPP message received");
-      this.send(JSON.stringify(errorMessage));
       return;
     }
 
@@ -90,8 +86,6 @@ export class WebSocketService {
 
     if (![2, 3, 5].includes(messageType)) {
       console.error("Invalid OCPP message type received", messageType);
-      const errorMessage = this.ocppService.callErrorMessage(randomUUID(), OcppErrorCode.FORMATION_VIOLATION, "Invalid OCPP message type received");
-      this.send(JSON.stringify(errorMessage));
       return;
     }
 
