@@ -1,1 +1,1 @@
-export * from "./BootNotificationConf";
+export * from "./boot-notification-conf";

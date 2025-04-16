@@ -14,6 +14,7 @@ import {
   OcppService, 
   RegistrationStatus
 } from "../ocpp";
+import { validateDto } from "../utils";
 
 export class WebSocketService {
   public readonly chargePointIdentity = process.env.CS_IDENTITY;
@@ -22,6 +23,7 @@ export class WebSocketService {
 
   public registrationStatus: RegistrationStatus;
   public heartbeatInterval = Number(process.env.CS_HEARTBEAT_INTERVAL) || 60;
+  public isConnected = false;
 
   private readonly ocppService = new OcppService();
 
@@ -40,11 +42,11 @@ export class WebSocketService {
 
     this.wsClient.on("open", this.onOpen.bind(this));
     this.wsClient.on("ping", this.onPing.bind(this));
-    this.wsClient.on("pong", this.onPong.bind(this));
     this.wsClient.on("close", this.onClose.bind(this));
     this.wsClient.on("error", this.onError.bind(this));
     this.wsClient.on("message", this.onMessage.bind(this));
     
+    this.isConnected = true;
     this.startPingInterval();
   }
 
@@ -52,26 +54,22 @@ export class WebSocketService {
     if (this.pingTimeout) {
       clearInterval(this.pingTimeout);
     }
+
+    this.wsClient?.removeAllListeners();
   }
 
   public disconnect(): void {
     this.wsClient.close();
+    this.isConnected = false;
     this.cleanup();
   }
-
-  private onPong() {};
   
-  private onError(error: Error) {
+  private onError(error: Error): void {
     console.error("WS error occured", error);
   };
 
   private onMessage(msg: WebSocket.RawData): void {
     let parsedMessage: OcppMessage<unknown>;
-
-    if (this.registrationStatus === RegistrationStatus.REJECTED) {
-      console.error("While Rejected, the Charge Point SHALL NOT respond to any Central System initiated message");
-      return;
-    }
     
     try {
       parsedMessage = JSON.parse(msg.toString());
@@ -80,30 +78,31 @@ export class WebSocketService {
       return;
     }
 
-    if (!Array.isArray(parsedMessage)) {
+    const [messageType] = parsedMessage;
+    const isValidOcppMessage = Array.isArray(parsedMessage) && [2, 3, 4].includes(messageType);
+
+    if (!isValidOcppMessage) {
       console.error("Invalid OCPP message received", parsedMessage);
       return;
     }
 
-    const [messageType] = parsedMessage;
-
-    if (![2, 3, 5].includes(messageType)) {
-      console.error("Invalid OCPP message type received", messageType);
+    if (this.registrationStatus === RegistrationStatus.REJECTED) {
+      console.error("While Rejected, the Charge Point SHALL NOT respond to any Central System initiated message");
       return;
     }
 
-    const isInvalidCallMessage = messageType === OcppMessageType.CALL && parsedMessage.length !== 4;
-    const isInvalidResultMessage = messageType === OcppMessageType.RESULT && parsedMessage.length !== 3;
-    const isInvalidErrorMessage = messageType === OcppMessageType.ERROR && parsedMessage.length !== 5;
+    const isValidCallMessage = this.ocppService.validateOcppCallMessage(parsedMessage);
+    const isValidResultMessage = this.ocppService.validateOcppResultMessage(parsedMessage);
+    const isValidErrorMessage = this.ocppService.validateOcppResultMessage(parsedMessage);
 
-    if (isInvalidCallMessage) {
+    if (!isValidCallMessage) {
       console.error("Invalid OCPP call message received", parsedMessage);
       const errorMessage = this.ocppService.callErrorMessage(randomUUID(), OcppErrorCode.FORMATION_VIOLATION, "Invalid OCPP call message received");
       this.send(JSON.stringify(errorMessage));
       return;
     }
 
-    if (isInvalidResultMessage || isInvalidErrorMessage) {
+    if (isValidResultMessage || isValidErrorMessage) {
       console.error("Invalid OCPP message received", parsedMessage);
       return;
     }
@@ -132,34 +131,11 @@ export class WebSocketService {
       return;
     }
 
-    const { isValid, errors } = this.ocppService.validateOcppPayload(action, payload);
+    const { isValid, errorCode  } = this.ocppService.validateOcppRequestPayload(action, messageId, payload);
 
     if (!isValid) {
-      const [firstError] = errors;
-      let errorMessage: CallErrorMessage;
-
-      switch (firstError.keyword) {
-      case "additionalProperties":
-      case "enum":
-      case "format":
-      case "maxLength":
-        errorMessage = this.ocppService.callErrorMessage(messageId, OcppErrorCode.FORMATION_VIOLATION);
-        break;
-      case "type":
-        errorMessage = this.ocppService.callErrorMessage(messageId, OcppErrorCode.TYPE_CONSTRAINT_VIOLATION);
-        break;
-      case "required":
-        errorMessage = this.ocppService.callErrorMessage(messageId, OcppErrorCode.PROTOCOL_ERROR);
-        break;
-      case "NotImplemented":
-        errorMessage = this.ocppService.callErrorMessage(messageId, OcppErrorCode.NOT_IMPLEMENTED);
-        break;
-      default:
-        errorMessage = this.ocppService.callErrorMessage(messageId, OcppErrorCode.GENERIC_ERROR);
-        break;
-      }
-
-      console.error("Error during validation of OCPP call message", errorMessage);
+      const errorMessage = this.ocppService.callErrorMessage(messageId, errorCode);
+      console.error("Error during validation of OCPP call message payload", errorMessage);
       this.send(JSON.stringify(errorMessage));
       return;
     }
@@ -175,11 +151,11 @@ export class WebSocketService {
     }
 
     const [,, action] = pendingRequest;
-    const { isValid, errors } = this.ocppService.validateOcppPayload(action, payload);
+    this.cleanPendingRequest(messageId);
+    const isResponsePayloadValid = this.ocppService.validateOcppResultPayload(action, payload);
 
-    if (!isValid) {
-      console.error("Recieved invlid OCPP result message", errors);
-      this.cleanPendingRequest(messageId);
+    if (!isResponsePayloadValid) {
+      console.error("Recieved invlid OCPP response message", message);
       return;
     }
 
@@ -195,13 +171,19 @@ export class WebSocketService {
   private handleBootNotification(payload: BootNotificationConf): void {
     this.registrationStatus = payload.status;
     if (payload.interval > 10) this.heartbeatInterval = payload.interval;
+
+    if (this.registrationStatus === RegistrationStatus.REJECTED) {
+      setTimeout(() => {
+        this.sendBootNotificationReq();
+      }, this.heartbeatInterval);
+    }
   }
 
-  private handleCallErrorMessage(message: CallErrorMessage): void {}
+  private handleCallErrorMessage(message: CallErrorMessage): void {
+    console.error("Call error message received", message);
+  }
 
-  private onOpen(): void {
-    console.log("WebSocket connection is opened");
-
+  private sendBootNotificationReq(): void {
     const bootNotificationReq = this.ocppService.callMessage(OcppMessageAction.BOOT_NOTIFICATION, {
       chargePointModel: process.env.CS_MODEL,
       chargePointVendor: process.env.CS_VENDOR,
@@ -215,6 +197,11 @@ export class WebSocketService {
     });
 
     this.sendRequest(bootNotificationReq);
+  }
+
+  private onOpen(): void {
+    console.log("WebSocket connection is opened");
+    this.sendBootNotificationReq();
   };
 
   private sendRequest(message: CallMessage<unknown>): void {

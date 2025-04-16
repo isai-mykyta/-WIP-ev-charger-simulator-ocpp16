@@ -63,8 +63,3 @@ export type BootNotificationConf = {
   interval: number;
   status: RegistrationStatus;
 }
-
-export type ValidateOcppPayloadResult = {
-  isValid: boolean;
-  errors: ErrorObject[];
-}
